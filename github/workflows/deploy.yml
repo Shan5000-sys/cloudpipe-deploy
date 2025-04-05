@@ -1,0 +1,58 @@
+name: Deploy Static Site to S3
+
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      STACK_NAME: static-site
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v3
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Deploy S3 Infrastructure
+        run: |
+          aws cloudformation deploy \
+            --template-file s3-static-website.yml \
+            --stack-name $STACK_NAME \
+            --capabilities CAPABILITY_IAM
+
+      - name: Sync Frontend to S3
+        run: |
+          BUCKET_NAME="${STACK_NAME}-website"
+          aws s3 sync ./frontend s3://$BUCKET_NAME --delete
+
+      - name: Wait for a few seconds before testing
+        run: sleep 5
+
+      - name: Test Website Availability
+        run: |
+          REGION=${{ secrets.AWS_REGION }}
+          BUCKET_NAME="${STACK_NAME}-website"
+          URL="http://${BUCKET_NAME}.s3-website-${REGION}.amazonaws.com"
+          echo "Testing site at $URL"
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$URL")
+          if [ "$STATUS" -ne 200 ]; then
+            echo "❌ Website returned status code $STATUS"
+            exit 1
+          else
+            echo "✅ Website is up! (HTTP $STATUS)"
+          fi
+
+      - name: Check Homepage Content
+        run: |
+          REGION=${{ secrets.AWS_REGION }}
+          BUCKET_NAME="${STACK_NAME}-website"
+          URL="http://${BUCKET_NAME}.s3-website-${REGION}.amazonaws.com"
+          curl -s "$URL" | grep -q "Welcome" && echo "✅ Found expected content" || (echo "❌ Expected content not found" && exit 1)
+          
